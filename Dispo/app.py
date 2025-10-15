@@ -32,6 +32,52 @@ MODE_LABELS = {
 }
 GENERIC_SCOPE_TOKENS = ("tous", "toutes", "all", "global", "ensemble", "général", "general")
 
+ANNOTATION_TYPE_EXCLUSION = "exclusion"
+ANNOTATION_TYPE_COMMENT = "commentaire"
+ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE = "missing_excl_available"
+ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE = "missing_excl_unavailable"
+ANNOTATION_TYPE_MISSING_COMMENT = "missing_commentaire"
+
+EXCLUSION_ANNOTATION_TYPES: Tuple[str, ...] = (
+    ANNOTATION_TYPE_EXCLUSION,
+    ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
+    ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
+)
+
+MISSING_AVAILABLE_ANNOTATION_TYPES: Tuple[str, ...] = (
+    ANNOTATION_TYPE_EXCLUSION,
+    ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
+)
+
+MISSING_EXCLUSION_MODE_NONE = 0
+MISSING_EXCLUSION_MODE_AS_AVAILABLE = 1
+MISSING_EXCLUSION_MODE_AS_UNAVAILABLE = 2
+
+ANNOTATION_EXCLUSION_TYPES_SQL = ", ".join(f"'{t}'" for t in EXCLUSION_ANNOTATION_TYPES)
+ANNOTATION_MISSING_AVAILABLE_SQL = ", ".join(f"'{t}'" for t in MISSING_AVAILABLE_ANNOTATION_TYPES)
+
+MISSING_EXCLUSION_MODE_LABELS = {
+    MISSING_EXCLUSION_MODE_NONE: "Non exclu",
+    MISSING_EXCLUSION_MODE_AS_AVAILABLE: "Exclu comme disponible",
+    MISSING_EXCLUSION_MODE_AS_UNAVAILABLE: "Exclu comme indisponible",
+}
+
+
+def format_exclusion_status(row: pd.Series) -> str:
+    """Retourne une étiquette lisible pour l'état d'exclusion d'un bloc."""
+    is_excluded = int(row.get("is_excluded", 0))
+    if is_excluded != 1:
+        return "❌ Non"
+
+    status = int(row.get("est_disponible", 0))
+    if status == -1:
+        mode_value = int(row.get("missing_exclusion_mode", MISSING_EXCLUSION_MODE_NONE))
+        if mode_value == MISSING_EXCLUSION_MODE_AS_UNAVAILABLE:
+            return "✅ Oui (→ Indispo)"
+        if mode_value == MISSING_EXCLUSION_MODE_AS_AVAILABLE:
+            return "✅ Oui (→ Dispo)"
+    return "✅ Oui"
+
 
 def get_current_mode() -> str:
     return st.session_state.get("app_mode", MODE_EQUIPMENT)
@@ -363,13 +409,31 @@ def _load_blocks_equipment(site: str, equip: str, start_dt: datetime, end_dt: da
         WHEN b.est_disponible <> 1 THEN CAST(EXISTS (
             SELECT 1 FROM dispo_annotations a
             WHERE a.actif = 1
-            AND a.type_annotation = 'exclusion'
+            AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
             AND a.site = b.site
             AND a.equipement_id = b.equipement_id
             AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
         ) AS UNSIGNED)
         ELSE 0
-    END AS is_excluded
+    END AS is_excluded,
+    CASE
+        WHEN b.est_disponible = -1 THEN (
+            SELECT
+                COALESCE(MAX(
+                    CASE
+                        WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                        WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                        ELSE {MISSING_EXCLUSION_MODE_NONE}
+                    END
+                ), {MISSING_EXCLUSION_MODE_NONE})
+            FROM dispo_annotations a
+            WHERE a.actif = 1
+              AND a.site = b.site
+              AND a.equipement_id = b.equipement_id
+              AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
+        )
+        ELSE {MISSING_EXCLUSION_MODE_NONE}
+    END AS missing_exclusion_mode
     FROM base b
     WHERE b.equipement_id = :equip
     AND b.date_debut < :end
@@ -405,13 +469,31 @@ def _load_blocks_pdc(site: str, equip: str, start_dt: datetime, end_dt: datetime
         WHEN p.est_disponible <> 1 THEN CAST(EXISTS (
             SELECT 1 FROM dispo_annotations a
             WHERE a.actif = 1
-              AND a.type_annotation = 'exclusion'
+              AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
               AND a.site = p.site
               AND a.equipement_id = p.equipement_id
               AND NOT (a.date_fin <= p.date_debut OR a.date_debut >= p.date_fin)
         ) AS UNSIGNED)
         ELSE 0
-      END AS is_excluded
+      END AS is_excluded,
+      CASE
+        WHEN p.est_disponible = -1 THEN (
+            SELECT
+              COALESCE(MAX(
+                CASE
+                  WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                  WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                  ELSE {MISSING_EXCLUSION_MODE_NONE}
+                END
+              ), {MISSING_EXCLUSION_MODE_NONE})
+            FROM dispo_annotations a
+            WHERE a.actif = 1
+              AND a.site = p.site
+              AND a.equipement_id = p.equipement_id
+              AND NOT (a.date_fin <= p.date_debut OR a.date_debut >= p.date_fin)
+        )
+        ELSE {MISSING_EXCLUSION_MODE_NONE}
+      END AS missing_exclusion_mode
     FROM pdc p
     WHERE p.equipement_id = :equip
       AND p.date_debut < :end
@@ -484,13 +566,31 @@ def _load_filtered_blocks_equipment(start_dt: datetime, end_dt: datetime, site: 
         WHEN b.est_disponible <> 1 THEN CAST(EXISTS (
             SELECT 1 FROM dispo_annotations a
             WHERE a.actif = 1
-            AND a.type_annotation = 'exclusion'
+            AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
             AND a.site = b.site
             AND a.equipement_id = b.equipement_id
             AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
         ) AS UNSIGNED)
         ELSE 0
-    END AS is_excluded
+    END AS is_excluded,
+    CASE
+        WHEN b.est_disponible = -1 THEN (
+            SELECT
+                COALESCE(MAX(
+                    CASE
+                        WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                        WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                        ELSE {MISSING_EXCLUSION_MODE_NONE}
+                    END
+                ), {MISSING_EXCLUSION_MODE_NONE})
+            FROM dispo_annotations a
+            WHERE a.actif = 1
+              AND a.site = b.site
+              AND a.equipement_id = b.equipement_id
+              AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
+        )
+        ELSE {MISSING_EXCLUSION_MODE_NONE}
+    END AS missing_exclusion_mode
     FROM base b
     WHERE b.date_debut < :end
     AND b.date_fin   > :start
@@ -537,13 +637,31 @@ def _load_filtered_blocks_pdc(start_dt: datetime, end_dt: datetime, site: Option
         WHEN p.est_disponible <> 1 THEN CAST(EXISTS (
             SELECT 1 FROM dispo_annotations a
             WHERE a.actif = 1
-              AND a.type_annotation = 'exclusion'
+              AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
               AND a.site = p.site
               AND a.equipement_id = p.equipement_id
               AND NOT (a.date_fin <= p.date_debut OR a.date_debut >= p.date_fin)
         ) AS UNSIGNED)
         ELSE 0
-      END AS is_excluded
+      END AS is_excluded,
+      CASE
+        WHEN p.est_disponible = -1 THEN (
+            SELECT
+              COALESCE(MAX(
+                CASE
+                  WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                  WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                  ELSE {MISSING_EXCLUSION_MODE_NONE}
+                END
+              ), {MISSING_EXCLUSION_MODE_NONE})
+            FROM dispo_annotations a
+            WHERE a.actif = 1
+              AND a.site = p.site
+              AND a.equipement_id = p.equipement_id
+              AND NOT (a.date_fin <= p.date_debut OR a.date_debut >= p.date_fin)
+        )
+        ELSE {MISSING_EXCLUSION_MODE_NONE}
+      END AS missing_exclusion_mode
     FROM pdc p
     WHERE p.date_debut < :end
       AND p.date_fin > :start
@@ -616,7 +734,7 @@ def create_annotation(
 
     if (
         cascade
-        and annotation_type == "exclusion"
+        and annotation_type in EXCLUSION_ANNOTATION_TYPES
         and equip
         and equip.upper().startswith("AC")
     ):
@@ -930,14 +1048,18 @@ def _normalize_blocks_df(df: pd.DataFrame) -> pd.DataFrame:
             except Exception:
                 pass
             out[col] = s
-    for col in ["est_disponible","raw_point_count","duration_minutes","is_excluded"]:
+    for col in ["est_disponible","raw_point_count","duration_minutes","is_excluded","missing_exclusion_mode"]:
         if col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0).astype(int)
         else:
             if col == "is_excluded":
                 out[col] = 0
+            elif col == "missing_exclusion_mode":
+                out[col] = MISSING_EXCLUSION_MODE_NONE
     if "is_excluded" in out.columns and "est_disponible" in out.columns:
         out.loc[out["est_disponible"] == 1, "is_excluded"] = 0
+    if "missing_exclusion_mode" in out.columns and "est_disponible" in out.columns:
+        out.loc[out["est_disponible"] != -1, "missing_exclusion_mode"] = MISSING_EXCLUSION_MODE_NONE
     return out.sort_values("date_debut").reset_index(drop=True)
 
 
@@ -1080,13 +1202,23 @@ def calculate_availability(
     missing_minutes = missing_not_excluded
 
     if include_exclusions:
+        if "missing_exclusion_mode" in df.columns:
+            missing_mode_series = df["missing_exclusion_mode"].astype(int)
+        else:
+            missing_mode_series = pd.Series(MISSING_EXCLUSION_MODE_NONE, index=df.index)
         available_mask = (
             (df["est_disponible"] == 1)
             | ((df["est_disponible"] == 0) & (df["is_excluded"] == 1))
-            | ((df["est_disponible"] == -1) & (df["is_excluded"] == 1))
+            | (
+                (df["est_disponible"] == -1)
+                & (missing_mode_series == MISSING_EXCLUSION_MODE_AS_AVAILABLE)
+            )
         )
         unavailable_mask = (
             (df["est_disponible"] == 0) & (df["is_excluded"] == 0)
+        ) | (
+            (df["est_disponible"] == -1)
+            & (missing_mode_series == MISSING_EXCLUSION_MODE_AS_UNAVAILABLE)
         )
     else:
         available_mask = df["est_disponible"] == 1
@@ -1158,6 +1290,7 @@ def _build_station_timeline_df(timelines: Dict[str, pd.DataFrame]) -> pd.DataFra
                     "end": end_ts,
                     "est_disponible": int(row.get("est_disponible", 0)),
                     "is_excluded": int(row.get("is_excluded", 0)),
+                    "missing_exclusion_mode": int(row.get("missing_exclusion_mode", MISSING_EXCLUSION_MODE_NONE)),
                     "cause": row.get("cause"),
                     "duration_minutes": int(row.get("duration_minutes", 0)),
                 }
@@ -1167,15 +1300,27 @@ def _build_station_timeline_df(timelines: Dict[str, pd.DataFrame]) -> pd.DataFra
     if timeline_df.empty:
         return timeline_df
 
-    state_map = {
-        1: "✅ Disponible",
-        0: "❌ Indisponible",
-        -1: "⚠️ Donnée manquante",
-    }
-    timeline_df["state"] = timeline_df["est_disponible"].map(state_map).fillna("❓ Inconnu")
-    timeline_df["label"] = timeline_df["state"]
-    mask_excl = (timeline_df["is_excluded"] == 1) & (timeline_df["est_disponible"] != 1)
-    timeline_df.loc[mask_excl, "label"] = timeline_df.loc[mask_excl, "state"] + " (Exclu)"
+    if "missing_exclusion_mode" not in timeline_df.columns:
+        timeline_df["missing_exclusion_mode"] = MISSING_EXCLUSION_MODE_NONE
+    timeline_df["missing_exclusion_mode"] = timeline_df["missing_exclusion_mode"].fillna(MISSING_EXCLUSION_MODE_NONE).astype(int)
+
+    def _label(row: pd.Series) -> str:
+        status = int(row.get("est_disponible", 0))
+        is_excl = int(row.get("is_excluded", 0))
+        if status == 1:
+            return "✅ Disponible"
+        if status == 0:
+            return "❌ Indisponible (Exclu)" if is_excl == 1 else "❌ Indisponible"
+        if status == -1:
+            mode_value = int(row.get("missing_exclusion_mode", MISSING_EXCLUSION_MODE_NONE))
+            if is_excl == 1:
+                if mode_value == MISSING_EXCLUSION_MODE_AS_UNAVAILABLE:
+                    return "⚠️ Donnée manquante (Exclu indisponible)"
+                return "⚠️ Donnée manquante (Exclu disponible)"
+            return "⚠️ Donnée manquante"
+        return "❓ Inconnu (Exclu)" if is_excl == 1 else "❓ Inconnu"
+
+    timeline_df["label"] = timeline_df.apply(_label, axis=1)
     return timeline_df.sort_values(["Equipement", "start"]).reset_index(drop=True)
 
 
@@ -1495,19 +1640,37 @@ def _calculate_monthly_availability_equipment(
         end_dt = datetime.utcnow()
         start_dt = (end_dt.replace(day=1) - pd.DateOffset(months=months)).to_pydatetime()
     params_view = {"start": start_dt, "end": end_dt}
-    q_view = """
+    q_view = f"""
         SELECT site, equipement_id, date_debut, date_fin,
                est_disponible,
                TIMESTAMPDIFF(MINUTE, GREATEST(date_debut,:start), LEAST(date_fin,:end)) AS duration_minutes,
                CASE
                  WHEN est_disponible <> 1 THEN CAST(EXISTS (
                    SELECT 1 FROM dispo_annotations a
-                   WHERE a.actif = 1 AND a.type_annotation='exclusion'
+                   WHERE a.actif = 1 AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
                      AND a.site = site AND a.equipement_id = equipement_id
                      AND NOT (a.date_fin <= date_debut OR a.date_debut >= date_fin)
                  ) AS UNSIGNED)
                  ELSE 0
-               END AS is_excluded
+               END AS is_excluded,
+               CASE
+                 WHEN est_disponible = -1 THEN (
+                   SELECT
+                     COALESCE(MAX(
+                       CASE
+                         WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                         WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                         ELSE {MISSING_EXCLUSION_MODE_NONE}
+                       END
+                     ), {MISSING_EXCLUSION_MODE_NONE})
+                   FROM dispo_annotations a
+                   WHERE a.actif = 1
+                     AND a.site = site
+                     AND a.equipement_id = equipement_id
+                     AND NOT (a.date_fin <= date_debut OR a.date_debut >= date_fin)
+                 )
+                 ELSE {MISSING_EXCLUSION_MODE_NONE}
+               END AS missing_exclusion_mode
         FROM dispo_blocs_with_exclusion_flag
         WHERE date_debut < :end AND date_fin > :start
     """
@@ -1560,12 +1723,30 @@ def _calculate_monthly_availability_equipment(
           CASE
             WHEN b.est_disponible <> 1 THEN CAST(EXISTS (
               SELECT 1 FROM dispo_annotations a
-              WHERE a.actif = 1 AND a.type_annotation='exclusion'
+              WHERE a.actif = 1 AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
                 AND a.site = b.site AND a.equipement_id = b.equipement_id
                 AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
             ) AS UNSIGNED)
             ELSE 0
-          END AS is_excluded
+          END AS is_excluded,
+          CASE
+            WHEN b.est_disponible = -1 THEN (
+              SELECT
+                COALESCE(MAX(
+                  CASE
+                    WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                    WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                    ELSE {MISSING_EXCLUSION_MODE_NONE}
+                  END
+                ), {MISSING_EXCLUSION_MODE_NONE})
+              FROM dispo_annotations a
+              WHERE a.actif = 1
+                AND a.site = b.site
+                AND a.equipement_id = b.equipement_id
+                AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
+            )
+            ELSE {MISSING_EXCLUSION_MODE_NONE}
+          END AS missing_exclusion_mode
         FROM base b
         WHERE b.date_debut < :end AND b.date_fin > :start
           {equip_clause}
@@ -1617,12 +1798,30 @@ def _calculate_monthly_availability_pdc(
       CASE
         WHEN p.est_disponible <> 1 THEN CAST(EXISTS (
           SELECT 1 FROM dispo_annotations a
-          WHERE a.actif = 1 AND a.type_annotation='exclusion'
+          WHERE a.actif = 1 AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
             AND a.site = p.site AND a.equipement_id = p.equipement_id
             AND NOT (a.date_fin <= p.date_debut OR a.date_debut >= p.date_fin)
         ) AS UNSIGNED)
         ELSE 0
-      END AS is_excluded
+      END AS is_excluded,
+      CASE
+        WHEN p.est_disponible = -1 THEN (
+          SELECT
+            COALESCE(MAX(
+              CASE
+                WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                ELSE {MISSING_EXCLUSION_MODE_NONE}
+              END
+            ), {MISSING_EXCLUSION_MODE_NONE})
+          FROM dispo_annotations a
+          WHERE a.actif = 1
+            AND a.site = p.site
+            AND a.equipement_id = p.equipement_id
+            AND NOT (a.date_fin <= p.date_debut OR a.date_debut >= p.date_fin)
+        )
+        ELSE {MISSING_EXCLUSION_MODE_NONE}
+      END AS missing_exclusion_mode
     FROM pdc p
     WHERE p.date_debut < :end AND p.date_fin > :start
       {site_filter}
@@ -1854,12 +2053,30 @@ def generate_availability_report(
           CASE
             WHEN b.est_disponible <> 1 THEN CAST(EXISTS (
               SELECT 1 FROM dispo_annotations a
-              WHERE a.actif = 1 AND a.type_annotation='exclusion'
+              WHERE a.actif = 1 AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
                 AND a.site = b.site AND a.equipement_id = b.equipement_id
                 AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
             ) AS UNSIGNED)
             ELSE 0
-          END AS is_excluded
+          END AS is_excluded,
+          CASE
+            WHEN b.est_disponible = -1 THEN (
+              SELECT
+                COALESCE(MAX(
+                  CASE
+                    WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                    WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                    ELSE {MISSING_EXCLUSION_MODE_NONE}
+                  END
+                ), {MISSING_EXCLUSION_MODE_NONE})
+              FROM dispo_annotations a
+              WHERE a.actif = 1
+                AND a.site = b.site
+                AND a.equipement_id = b.equipement_id
+                AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
+            )
+            ELSE {MISSING_EXCLUSION_MODE_NONE}
+          END AS missing_exclusion_mode
         FROM base b
         WHERE b.date_debut < :end AND b.date_fin > :start
           {site_filter}
@@ -1902,12 +2119,30 @@ def generate_availability_report(
           CASE
             WHEN b.est_disponible <> 1 THEN CAST(EXISTS (
               SELECT 1 FROM dispo_annotations a
-              WHERE a.actif = 1 AND a.type_annotation='exclusion'
+              WHERE a.actif = 1 AND a.type_annotation IN ({ANNOTATION_EXCLUSION_TYPES_SQL})
                 AND a.site = b.site AND a.equipement_id = b.equipement_id
                 AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
             ) AS UNSIGNED)
             ELSE 0
-          END AS is_excluded
+          END AS is_excluded,
+          CASE
+            WHEN b.est_disponible = -1 THEN (
+              SELECT
+                COALESCE(MAX(
+                  CASE
+                    WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                    WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
+                    ELSE {MISSING_EXCLUSION_MODE_NONE}
+                  END
+                ), {MISSING_EXCLUSION_MODE_NONE})
+              FROM dispo_annotations a
+              WHERE a.actif = 1
+                AND a.site = b.site
+                AND a.equipement_id = b.equipement_id
+                AND NOT (a.date_fin <= b.date_debut OR a.date_debut >= b.date_fin)
+            )
+            ELSE {MISSING_EXCLUSION_MODE_NONE}
+          END AS missing_exclusion_mode
         FROM base b
         WHERE b.date_debut < :end AND b.date_fin > :start
         ORDER BY b.equipement_id, b.date_debut
@@ -1964,7 +2199,7 @@ def generate_availability_report(
                 "Statut": "❌ Indisponible",
                 "Cause Originale": cause_originale,
                 "Cause Traduite": cause_traduite,
-                "Exclu": "✅ Oui" if block["is_excluded"] == 1 else "❌ Non",
+                "Exclu": format_exclusion_status(block),
             })
 
         missing_blocks = equip_data[equip_data["est_disponible"] == -1].copy()
@@ -1980,7 +2215,7 @@ def generate_availability_report(
                 "Statut": "⚠️ Données manquantes",
                 "Cause Originale": "Données manquantes",
                 "Cause Traduite": "Aucune donnée disponible pour cette période",
-                "Exclu": "✅ Oui" if block["is_excluded"] == 1 else "❌ Non",
+                "Exclu": format_exclusion_status(block),
             })
 
         report[equip] = pd.DataFrame(report_data)
@@ -2661,16 +2896,26 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
     df_plot = df.copy()
     df_plot["start"] = pd.to_datetime(df_plot["date_debut"])
     df_plot["end"] = pd.to_datetime(df_plot["date_fin"])
-    df_plot["state"] = df_plot["est_disponible"].map({
-        1: "✅ Disponible",
-        0: "❌ Indisponible",
-        -1: "⚠️ Donnée manquante"
-    })
+    if "missing_exclusion_mode" not in df_plot.columns:
+        df_plot["missing_exclusion_mode"] = MISSING_EXCLUSION_MODE_NONE
+    df_plot["missing_exclusion_mode"] = df_plot["missing_exclusion_mode"].fillna(MISSING_EXCLUSION_MODE_NONE).astype(int)
 
-    df_plot["excluded"] = ""
-    mask_excluded = (df_plot["is_excluded"] == 1) & (df_plot["est_disponible"] != 1)
-    df_plot.loc[mask_excluded, "excluded"] = " (Exclu)"
-    df_plot["label"] = df_plot["state"] + df_plot["excluded"]
+    def _label_row(row: pd.Series) -> str:
+        status = int(row.get("est_disponible", 0))
+        is_excluded = int(row.get("is_excluded", 0))
+        if status == 1:
+            return "✅ Disponible"
+        if status == 0:
+            return "❌ Indisponible (Exclu)" if is_excluded == 1 else "❌ Indisponible"
+        mode_value = int(row.get("missing_exclusion_mode", MISSING_EXCLUSION_MODE_NONE))
+        if is_excluded == 1:
+            if mode_value == MISSING_EXCLUSION_MODE_AS_UNAVAILABLE:
+                return "⚠️ Donnée manquante (Exclu indisponible)"
+            return "⚠️ Donnée manquante (Exclu disponible)"
+        return "⚠️ Donnée manquante"
+
+    df_plot["label"] = df_plot.apply(_label_row, axis=1)
+    df_plot["missing_mode_label"] = df_plot["missing_exclusion_mode"].map(MISSING_EXCLUSION_MODE_LABELS).fillna("Non défini")
     
     fig = px.timeline(
         df_plot,
@@ -2685,14 +2930,16 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
             "start": "|%Y-%m-%d %H:%M",
             "end": "|%Y-%m-%d %H:%M",
             "label": False,
-            "equipement_id": False
+            "equipement_id": False,
+            "missing_mode_label": True,
         },
         color_discrete_map={
             "✅ Disponible": "#28a745",
             "❌ Indisponible": "#dc3545",
             "❌ Indisponible (Exclu)": "#fd7e14",
             "⚠️ Donnée manquante": "#6c757d",
-            "⚠️ Donnée manquante (Exclu)": "#BBDB07"
+            "⚠️ Donnée manquante (Exclu disponible)": "#BBDB07",
+            "⚠️ Donnée manquante (Exclu indisponible)": "#f77f00",
         }
     )
     
@@ -2853,7 +3100,15 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
             else:
                 status_icon = "✅"
 
-            excl_tag = " [EXCLU]" if row["is_excluded"] == 1 else ""
+            excl_tag = ""
+            if row["est_disponible"] == -1 and row["is_excluded"] == 1:
+                mode_value = int(row.get("missing_exclusion_mode", MISSING_EXCLUSION_MODE_NONE))
+                if mode_value == MISSING_EXCLUSION_MODE_AS_UNAVAILABLE:
+                    excl_tag = " [EXCLU → Indispo]"
+                else:
+                    excl_tag = " [EXCLU → Dispo]"
+            elif row["est_disponible"] == 0 and row["is_excluded"] == 1:
+                excl_tag = " [EXCLU]"
             start_str = row["start"].strftime("%Y-%m-%d %H:%M")
             end_str = row["end"].strftime("%Y-%m-%d %H:%M")
             cause = row.get("cause", "N/A")
@@ -2893,64 +3148,89 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
                     st.markdown("**🔧 Cause d'indisponibilité :**")
                     st.info(f"**Cause :** {cause_originale}")
             
-            if est_val == 1:
-                ann_options = ["Commentaire"]
-                ann_help = "Impossible d'exclure un bloc déjà disponible"
-                ann_index = 0
-            else:
-                ann_options = ["Exclusion", "Commentaire"]
-                ann_help = "Commentaire: note informative | Exclusion: exclure du calcul de disponibilité"
-                ann_index = 0  
+        if est_val == 1:
+            ann_choices = [
+                (ANNOTATION_TYPE_COMMENT, "Commentaire"),
+            ]
+            ann_help = "Impossible d'exclure un bloc déjà disponible"
+            default_choice = ANNOTATION_TYPE_COMMENT
+        elif est_val == -1:
+            ann_choices = [
+                (ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE, "Exclure comme disponible"),
+                (ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE, "Exclure comme indisponible"),
+                (ANNOTATION_TYPE_MISSING_COMMENT, "Commentaire"),
+            ]
+            ann_help = "Choisissez comment traiter ces données manquantes dans le calcul de disponibilité."
+            default_choice = ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE
+        else:
+            ann_choices = [
+                (ANNOTATION_TYPE_EXCLUSION, "Exclusion"),
+                (ANNOTATION_TYPE_COMMENT, "Commentaire"),
+            ]
+            ann_help = "Commentaire: note informative | Exclusion: exclure du calcul de disponibilité"
+            default_choice = ANNOTATION_TYPE_EXCLUSION
 
-            col1, col2 = st.columns(2)
-            with col1:
-                annotation_type = st.radio(
-                    "Type d'annotation",
-                    options=ann_options,
-                    index=ann_index,
-                    horizontal=True,
-                    help=ann_help
-                )
+        choice_values = [value for value, _ in ann_choices]
+        choice_labels = {value: label for value, label in ann_choices}
+        default_index = choice_values.index(default_choice)
 
-            with col2:
-                user_name = st.text_input(
-                    "Votre nom (optionnel)",
+        col1, col2 = st.columns(2)
+        with col1:
+            annotation_type = st.radio(
+                "Type d'annotation",
+                options=choice_values,
+                index=default_index,
+                horizontal=True,
+                format_func=lambda opt: choice_labels.get(opt, opt),
+                help=ann_help
+            )
+
+        with col2:
+            user_name = st.text_input(
+                "Votre nom (optionnel)",
                     placeholder="ex: Jean Dupont",
                     help="Identifiez-vous pour traçabilité"
                 )
 
-            default_comment = ""
-            if annotation_type == "Exclusion" and est_val == -1:
-                default_comment = f"Exclusion: données manquantes ({selected_row['start']} → {selected_row['end']})"
-
-            comment = st.text_area(
-                "Commentaire / Raison",
-                value=default_comment, 
-                placeholder="Décrivez la raison de cette annotation...",
-                help="Obligatoire - Minimum 10 caractères"
+        default_comment = ""
+        if annotation_type in {
+            ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
+            ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
+        }:
+            suffix = "comme disponible" if annotation_type == ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE else "comme indisponible"
+            default_comment = (
+                f"Exclusion: données manquantes ({suffix}) "
+                f"({selected_row['start']} → {selected_row['end']})"
             )
 
-            submitted = st.form_submit_button("✅ Valider l'annotation")
+        comment = st.text_area(
+            "Commentaire / Raison",
+            value=default_comment,
+            placeholder="Décrivez la raison de cette annotation...",
+            help="Obligatoire - Minimum 10 caractères"
+        )
 
-            if submitted:
-                if not comment :
-                    st.error("❌ Veuillez mettre un commentaire.")
-                else:
-                    type_db = "commentaire" if annotation_type == "Commentaire" else "exclusion"
-                    user = user_name.strip() or "Utilisateur UI"
-                    success = create_annotation(
-                        site=site,
-                        equip=equip,
-                        start_dt=selected_row["date_debut"],
-                        end_dt=selected_row["date_fin"],
-                        annotation_type=type_db,
-                        comment=comment.strip(),
-                        user=user
-                    )
-                    if success:
-                        st.success(f"✅ {annotation_type} ajoutée avec succès !")
-                        st.balloons()
-                        st.rerun()
+        submitted = st.form_submit_button("✅ Valider l'annotation")
+
+        if submitted:
+            if not comment :
+                st.error("❌ Veuillez mettre un commentaire.")
+            else:
+                type_db = annotation_type
+                user = user_name.strip() or "Utilisateur UI"
+                success = create_annotation(
+                    site=site,
+                    equip=equip,
+                    start_dt=selected_row["date_debut"],
+                    end_dt=selected_row["date_fin"],
+                    annotation_type=type_db,
+                    comment=comment.strip(),
+                    user=user
+                )
+                if success:
+                    st.success(f"✅ {choice_labels.get(annotation_type, annotation_type)} ajoutée avec succès !")
+                    st.balloons()
+                    st.rerun()
 
     with st.expander("⚡ Exclusion rapide des données manquantes", expanded=False):
         month_default = datetime.utcnow().date().replace(day=1)
@@ -2979,6 +3259,17 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
             placeholder="Votre nom",
             key="timeline_missing_month_user",
             help="Identifiez l'opérateur à l'origine de cette exclusion groupée.",
+        )
+        bulk_mode = st.radio(
+            "Mode d'exclusion",
+            options=[
+                ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
+                ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
+            ],
+            index=0,
+            format_func=lambda opt: "Exclure comme disponible" if opt == ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE else "Exclure comme indisponible",
+            horizontal=True,
+            help="Définissez comment les données manquantes seront prises en compte dans les calculs."
         )
 
         if st.button(
@@ -3043,7 +3334,7 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
                                 equip=target_equip,
                                 start_dt=start_value,
                                 end_dt=end_value,
-                                annotation_type="exclusion",
+                                annotation_type=bulk_mode,
                                 comment=comment_txt,
                                 user=user_txt,
                             ):
@@ -3420,6 +3711,110 @@ def render_exclusions_tab():
                 with col_info:
                     st.caption("🗑️ Utilisez la liste ci-dessus pour supprimer une exclusion.")
 
+    st.divider()
+
+    st.subheader("📋 Exclusions des données manquantes")
+    missing_frames: List[pd.DataFrame] = []
+    for ann_type, label in [
+        (ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE, "Exclure comme disponible"),
+        (ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE, "Exclure comme indisponible"),
+    ]:
+        df_missing = get_annotations(annotation_type=ann_type, limit=200)
+        if df_missing.empty:
+            continue
+        df_missing = df_missing.copy()
+        df_missing["mode_label"] = label
+        missing_frames.append(df_missing)
+
+    if not missing_frames:
+        st.info("ℹ️ Aucune exclusion spécifique aux données manquantes n'est enregistrée.")
+    else:
+        df_missing_excl = pd.concat(missing_frames, ignore_index=True)
+        df_display = df_missing_excl.copy()
+        df_display["Période"] = df_display.apply(
+            lambda r: f"{pd.to_datetime(r['date_debut']).strftime('%Y-%m-%d')} → {pd.to_datetime(r['date_fin']).strftime('%Y-%m-%d')}",
+            axis=1
+        )
+        df_display["Statut"] = df_display["actif"].map({1: "✅ Active", 0: "❌ Inactive"})
+        df_display["Créé le"] = pd.to_datetime(df_display["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
+        df_display["Mode d'exclusion"] = df_display["mode_label"]
+
+        columns_config_missing = [
+            ("id", "ID", 0.7),
+            ("site", "Site", 1.0),
+            ("equipement_id", "Équipement", 1.1),
+            ("Période", "Période", 1.6),
+            ("Mode d'exclusion", "Mode d'exclusion", 1.4),
+            ("Statut", "Statut", 1.0),
+            ("commentaire", "Commentaire", 2.4),
+            ("created_by", "Créé par", 1.1),
+            ("Créé le", "Créé le", 1.2),
+        ]
+
+        render_inline_delete_table(
+            df_display,
+            column_settings=columns_config_missing,
+            key_prefix="missing_exclusion",
+            delete_handler=delete_annotation,
+            success_message="✅ Exclusion données manquantes #{id} supprimée !",
+            error_message="❌ Échec de suppression pour l'exclusion #{id}.",
+        )
+
+        st.subheader("⚙️ Gérer une exclusion de données manquantes")
+        selected_missing_id = st.number_input(
+            "ID de l'exclusion à gérer (données manquantes)",
+            min_value=0,
+            value=0,
+            step=1,
+            help="Entrez l'ID de l'exclusion à modifier",
+            key="missing_exclusion_manage_id",
+        )
+
+        if selected_missing_id > 0:
+            selected_missing = df_missing_excl[df_missing_excl["id"] == selected_missing_id]
+
+            if selected_missing.empty:
+                st.error(f"❌ Aucune exclusion de données manquantes trouvée avec l'ID {selected_missing_id}")
+            else:
+                excl_info = selected_missing.iloc[0]
+                is_active = excl_info["actif"] == 1
+                mode_label = excl_info.get("mode_label", "")
+
+                st.info(f"""
+                **Exclusion #{selected_missing_id}**
+                📍 Site: {excl_info['site']} | Équipement: {excl_info['equipement_id']}
+                📅 Période: {pd.to_datetime(excl_info['date_debut']).strftime('%Y-%m-%d')} → {pd.to_datetime(excl_info['date_fin']).strftime('%Y-%m-%d')}
+                ⚙️ Mode: {mode_label}
+                💬 Commentaire: {excl_info['commentaire']}
+                📊 Statut: {"✅ Active" if is_active else "❌ Inactive"}
+                """)
+
+                col_btn1, col_info = st.columns([1, 1])
+
+                with col_btn1:
+                    if not is_active:
+                        if st.button(
+                            "✅ Activer",
+                            use_container_width=True,
+                            type="primary",
+                            key=f"missing_exclusion_activate_{selected_missing_id}",
+                        ):
+                            if toggle_annotation(selected_missing_id, True):
+                                st.success(f"✅ Exclusion #{selected_missing_id} activée !")
+                                st.rerun()
+                    else:
+                        if st.button(
+                            "❌ Désactiver",
+                            use_container_width=True,
+                            key=f"missing_exclusion_deactivate_{selected_missing_id}",
+                        ):
+                            if toggle_annotation(selected_missing_id, False):
+                                st.warning(f"⚠️ Exclusion #{selected_missing_id} désactivée !")
+                                st.rerun()
+
+                with col_info:
+                    st.caption("🗑️ Utilisez la liste ci-dessus pour supprimer une exclusion de données manquantes.")
+
 def render_comments_tab():
     """Affiche l'onglet de gestion des commentaires."""
     st.header("💬 Gestion des Commentaires")
@@ -3524,6 +3919,116 @@ def render_comments_tab():
                                 st.rerun()
 
                 st.caption("🗑️ Utilisez la liste ci-dessus pour supprimer un commentaire.")
+
+    st.divider()
+
+    st.subheader("💬 Commentaires sur les données manquantes")
+    df_missing_comments = get_annotations(annotation_type=ANNOTATION_TYPE_MISSING_COMMENT, limit=200)
+
+    if df_missing_comments.empty:
+        st.info("ℹ️ Aucun commentaire lié aux données manquantes pour le moment.")
+    else:
+        df_display = df_missing_comments.copy()
+        df_display["Période"] = df_display.apply(
+            lambda r: f"{pd.to_datetime(r['date_debut']).strftime('%Y-%m-%d %H:%M')} → {pd.to_datetime(r['date_fin']).strftime('%Y-%m-%d %H:%M')}",
+            axis=1
+        )
+        df_display["Créé le"] = pd.to_datetime(df_display["created_at"]).dt.strftime("%Y-%m-%d %H:%M")
+        df_display["Statut"] = df_display["actif"].map({1: "✅ Actif", 0: "❌ Inactif"})
+
+        columns_config_missing_comments = [
+            ("id", "ID", 0.7),
+            ("site", "Site", 1.0),
+            ("equipement_id", "Équipement", 1.1),
+            ("Période", "Période", 1.8),
+            ("commentaire", "Commentaire", 2.5),
+            ("Statut", "Statut", 1.0),
+            ("created_by", "Créé par", 1.1),
+            ("Créé le", "Créé le", 1.2),
+        ]
+
+        render_inline_delete_table(
+            df_display,
+            column_settings=columns_config_missing_comments,
+            key_prefix="missing_comment",
+            delete_handler=delete_annotation,
+            success_message="✅ Commentaire données manquantes #{id} supprimé !",
+            error_message="❌ Échec de suppression pour le commentaire #{id}.",
+        )
+
+        st.subheader("✏️ Éditer un commentaire (données manquantes)")
+        selected_missing_comment_id = st.number_input(
+            "ID du commentaire à éditer (données manquantes)",
+            min_value=0,
+            value=0,
+            step=1,
+            help="Entrez l'ID du commentaire à modifier",
+            key="missing_comment_edit_id",
+        )
+
+        if selected_missing_comment_id > 0:
+            selected_comment = df_missing_comments[df_missing_comments["id"] == selected_missing_comment_id]
+
+            if selected_comment.empty:
+                st.error(f"❌ Aucun commentaire trouvé avec l'ID {selected_missing_comment_id}")
+            else:
+                comment_info = selected_comment.iloc[0]
+                current_text = comment_info["commentaire"]
+
+                st.info(f"""
+                **Commentaire #{selected_missing_comment_id}**
+                📍 Site: {comment_info['site']} | Équipement: {comment_info['equipement_id']}
+                📅 Période: {pd.to_datetime(comment_info['date_debut']).strftime('%Y-%m-%d %H:%M')} → {pd.to_datetime(comment_info['date_fin']).strftime('%Y-%m-%d %H:%M')}
+                👤 Créé par: {comment_info['created_by']}
+                """)
+
+                new_text = st.text_area(
+                    "Nouveau texte du commentaire",
+                    value=current_text,
+                    height=150,
+                    help="Modifiez le texte du commentaire",
+                    key=f"missing_comment_text_{selected_missing_comment_id}",
+                )
+
+                col1, col2 = st.columns(2)
+
+                with col1:
+                    if st.button(
+                        "💾 Enregistrer les modifications",
+                        type="primary",
+                        use_container_width=True,
+                        key=f"missing_comment_save_{selected_missing_comment_id}",
+                    ):
+                        if not new_text :
+                            st.error("❌ Veuillez mettre un commentaire.")
+                        else:
+                            if update_annotation_comment(selected_missing_comment_id, new_text.strip()):
+                                st.success(f"✅ Commentaire #{selected_missing_comment_id} mis à jour !")
+                                st.rerun()
+
+                with col2:
+                    is_active = comment_info["actif"] == 1
+                    if is_active:
+                        if st.button(
+                            "❌ Désactiver",
+                            use_container_width=True,
+                            key=f"missing_comment_deactivate_{selected_missing_comment_id}",
+                        ):
+                            if toggle_annotation(selected_missing_comment_id, False):
+                                st.warning(f"⚠️ Commentaire #{selected_missing_comment_id} désactivé !")
+                                st.rerun()
+                    else:
+                        if st.button(
+                            "✅ Activer",
+                            use_container_width=True,
+                            type="primary",
+                            key=f"missing_comment_activate_{selected_missing_comment_id}",
+                        ):
+                            if toggle_annotation(selected_missing_comment_id, True):
+                                st.success(f"✅ Commentaire #{selected_missing_comment_id} activé !")
+                                st.rerun()
+
+                st.caption("🗑️ Utilisez la liste ci-dessus pour supprimer un commentaire lié aux données manquantes.")
 
 
 
@@ -4453,7 +4958,8 @@ def render_statistics_tab() -> None:
                 "❌ Indisponible": "#dc3545",
                 "❌ Indisponible (Exclu)": "#fd7e14",
                 "⚠️ Donnée manquante": "#6c757d",
-                "⚠️ Donnée manquante (Exclu)": "#BBDB07",
+                "⚠️ Donnée manquante (Exclu disponible)": "#BBDB07",
+                "⚠️ Donnée manquante (Exclu indisponible)": "#f77f00",
                 "❓ Inconnu": "#adb5bd",
                 "❓ Inconnu (Exclu)": "#868e96",
             }
