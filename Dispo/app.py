@@ -34,19 +34,36 @@ GENERIC_SCOPE_TOKENS = ("tous", "toutes", "all", "global", "ensemble", "généra
 
 ANNOTATION_TYPE_EXCLUSION = "exclusion"
 ANNOTATION_TYPE_COMMENT = "commentaire"
-ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE = "missing_excl_available"
-ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE = "missing_excl_unavailable"
+ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE = "missing_ex_avail"
+ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE_LEGACY = "missing_excl_available"
+ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE = "missing_ex_unavail"
+ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE_LEGACY = "missing_excl_unavailable"
 ANNOTATION_TYPE_MISSING_COMMENT = "missing_commentaire"
 
-EXCLUSION_ANNOTATION_TYPES: Tuple[str, ...] = (
-    ANNOTATION_TYPE_EXCLUSION,
+
+def _unique_preserve_order(values: Tuple[str, ...]) -> Tuple[str, ...]:
+    """Return unique values while preserving order."""
+
+    return tuple(dict.fromkeys(values))
+
+
+MISSING_EXCLUSION_ANNOTATION_TYPES: Tuple[str, ...] = (
     ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
     ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
+    ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE_LEGACY,
+    ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE_LEGACY,
 )
 
-MISSING_AVAILABLE_ANNOTATION_TYPES: Tuple[str, ...] = (
-    ANNOTATION_TYPE_EXCLUSION,
-    ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
+EXCLUSION_ANNOTATION_TYPES: Tuple[str, ...] = _unique_preserve_order(
+    (ANNOTATION_TYPE_EXCLUSION, *MISSING_EXCLUSION_ANNOTATION_TYPES)
+)
+
+MISSING_AVAILABLE_ANNOTATION_TYPES: Tuple[str, ...] = _unique_preserve_order(
+    (
+        ANNOTATION_TYPE_EXCLUSION,
+        ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
+        ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE_LEGACY,
+    )
 )
 
 MISSING_EXCLUSION_MODE_NONE = 0
@@ -54,7 +71,18 @@ MISSING_EXCLUSION_MODE_AS_AVAILABLE = 1
 MISSING_EXCLUSION_MODE_AS_UNAVAILABLE = 2
 
 ANNOTATION_EXCLUSION_TYPES_SQL = ", ".join(f"'{t}'" for t in EXCLUSION_ANNOTATION_TYPES)
-ANNOTATION_MISSING_AVAILABLE_SQL = ", ".join(f"'{t}'" for t in MISSING_AVAILABLE_ANNOTATION_TYPES)
+ANNOTATION_MISSING_AVAILABLE_SQL = ", ".join(
+    f"'{t}'" for t in MISSING_AVAILABLE_ANNOTATION_TYPES
+)
+ANNOTATION_MISSING_UNAVAILABLE_SQL = ", ".join(
+    f"'{t}'"
+    for t in _unique_preserve_order(
+        (
+            ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
+            ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE_LEGACY,
+        )
+    )
+)
 
 MISSING_EXCLUSION_MODE_LABELS = {
     MISSING_EXCLUSION_MODE_NONE: "Non exclu",
@@ -421,7 +449,7 @@ def _load_blocks_equipment(site: str, equip: str, start_dt: datetime, end_dt: da
             SELECT
                 COALESCE(MAX(
                     CASE
-                        WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                        WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                         WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                         ELSE {MISSING_EXCLUSION_MODE_NONE}
                     END
@@ -481,7 +509,7 @@ def _load_blocks_pdc(site: str, equip: str, start_dt: datetime, end_dt: datetime
             SELECT
               COALESCE(MAX(
                 CASE
-                  WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                  WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                   WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                   ELSE {MISSING_EXCLUSION_MODE_NONE}
                 END
@@ -578,7 +606,7 @@ def _load_filtered_blocks_equipment(start_dt: datetime, end_dt: datetime, site: 
             SELECT
                 COALESCE(MAX(
                     CASE
-                        WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                        WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                         WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                         ELSE {MISSING_EXCLUSION_MODE_NONE}
                     END
@@ -649,7 +677,7 @@ def _load_filtered_blocks_pdc(start_dt: datetime, end_dt: datetime, site: Option
             SELECT
               COALESCE(MAX(
                 CASE
-                  WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                  WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                   WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                   ELSE {MISSING_EXCLUSION_MODE_NONE}
                 END
@@ -1658,7 +1686,7 @@ def _calculate_monthly_availability_equipment(
                    SELECT
                      COALESCE(MAX(
                        CASE
-                         WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                         WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                          WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                          ELSE {MISSING_EXCLUSION_MODE_NONE}
                        END
@@ -1734,7 +1762,7 @@ def _calculate_monthly_availability_equipment(
               SELECT
                 COALESCE(MAX(
                   CASE
-                    WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                    WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                     WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                     ELSE {MISSING_EXCLUSION_MODE_NONE}
                   END
@@ -1809,7 +1837,7 @@ def _calculate_monthly_availability_pdc(
           SELECT
             COALESCE(MAX(
               CASE
-                WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                 WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                 ELSE {MISSING_EXCLUSION_MODE_NONE}
               END
@@ -2064,7 +2092,7 @@ def generate_availability_report(
               SELECT
                 COALESCE(MAX(
                   CASE
-                    WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                    WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                     WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                     ELSE {MISSING_EXCLUSION_MODE_NONE}
                   END
@@ -2130,7 +2158,7 @@ def generate_availability_report(
               SELECT
                 COALESCE(MAX(
                   CASE
-                    WHEN a.type_annotation = '{ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE}' THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
+                    WHEN a.type_annotation IN ({ANNOTATION_MISSING_UNAVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_UNAVAILABLE}
                     WHEN a.type_annotation IN ({ANNOTATION_MISSING_AVAILABLE_SQL}) THEN {MISSING_EXCLUSION_MODE_AS_AVAILABLE}
                     ELSE {MISSING_EXCLUSION_MODE_NONE}
                   END
@@ -3193,27 +3221,23 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
                     )
 
             default_comment = ""
-            if annotation_type in {
-                ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
-                ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
-            }:
-                suffix = "comme disponible" if annotation_type == ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE else "comme indisponible"
-                default_comment = (
-                    f"Exclusion: données manquantes ({suffix}) "
-                    f"({selected_row['start']} → {selected_row['end']})"
+            comment_placeholder = "Décrivez la raison de cette annotation..."
+            if annotation_type in MISSING_EXCLUSION_ANNOTATION_TYPES:
+                comment_placeholder = (
+                    "Ex: Données manquantes à traiter comme disponible/indisponible"
                 )
 
             comment = st.text_area(
                 "Commentaire / Raison",
                 value=default_comment,
-                placeholder="Décrivez la raison de cette annotation...",
+                placeholder=comment_placeholder,
                 help="Obligatoire - Minimum 10 caractères"
             )
 
             submitted = st.form_submit_button("✅ Valider l'annotation")
 
         if submitted:
-            if not comment :
+            if not comment:
                 st.error("❌ Veuillez mettre un commentaire.")
             else:
                 type_db = annotation_type
