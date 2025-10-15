@@ -3148,69 +3148,69 @@ def render_timeline_tab(site: Optional[str], equip: Optional[str], start_dt: dat
                     st.markdown("**🔧 Cause d'indisponibilité :**")
                     st.info(f"**Cause :** {cause_originale}")
             
-        if est_val == 1:
-            ann_choices = [
-                (ANNOTATION_TYPE_COMMENT, "Commentaire"),
-            ]
-            ann_help = "Impossible d'exclure un bloc déjà disponible"
-            default_choice = ANNOTATION_TYPE_COMMENT
-        elif est_val == -1:
-            ann_choices = [
-                (ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE, "Exclure comme disponible"),
-                (ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE, "Exclure comme indisponible"),
-                (ANNOTATION_TYPE_MISSING_COMMENT, "Commentaire"),
-            ]
-            ann_help = "Choisissez comment traiter ces données manquantes dans le calcul de disponibilité."
-            default_choice = ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE
-        else:
-            ann_choices = [
-                (ANNOTATION_TYPE_EXCLUSION, "Exclusion"),
-                (ANNOTATION_TYPE_COMMENT, "Commentaire"),
-            ]
-            ann_help = "Commentaire: note informative | Exclusion: exclure du calcul de disponibilité"
-            default_choice = ANNOTATION_TYPE_EXCLUSION
+            if est_val == 1:
+                ann_choices = [
+                    (ANNOTATION_TYPE_COMMENT, "Commentaire"),
+                ]
+                ann_help = "Impossible d'exclure un bloc déjà disponible"
+                default_choice = ANNOTATION_TYPE_COMMENT
+            elif est_val == -1:
+                ann_choices = [
+                    (ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE, "Exclure comme disponible"),
+                    (ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE, "Exclure comme indisponible"),
+                    (ANNOTATION_TYPE_MISSING_COMMENT, "Commentaire"),
+                ]
+                ann_help = "Choisissez comment traiter ces données manquantes dans le calcul de disponibilité."
+                default_choice = ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE
+            else:
+                ann_choices = [
+                    (ANNOTATION_TYPE_EXCLUSION, "Exclusion"),
+                    (ANNOTATION_TYPE_COMMENT, "Commentaire"),
+                ]
+                ann_help = "Commentaire: note informative | Exclusion: exclure du calcul de disponibilité"
+                default_choice = ANNOTATION_TYPE_EXCLUSION
 
-        choice_values = [value for value, _ in ann_choices]
-        choice_labels = {value: label for value, label in ann_choices}
-        default_index = choice_values.index(default_choice)
+            choice_values = [value for value, _ in ann_choices]
+            choice_labels = {value: label for value, label in ann_choices}
+            default_index = choice_values.index(default_choice)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            annotation_type = st.radio(
-                "Type d'annotation",
-                options=choice_values,
-                index=default_index,
-                horizontal=True,
-                format_func=lambda opt: choice_labels.get(opt, opt),
-                help=ann_help
-            )
-
-        with col2:
-            user_name = st.text_input(
-                "Votre nom (optionnel)",
-                    placeholder="ex: Jean Dupont",
-                    help="Identifiez-vous pour traçabilité"
+            col1, col2 = st.columns(2)
+            with col1:
+                annotation_type = st.radio(
+                    "Type d'annotation",
+                    options=choice_values,
+                    index=default_index,
+                    horizontal=True,
+                    format_func=lambda opt: choice_labels.get(opt, opt),
+                    help=ann_help
                 )
 
-        default_comment = ""
-        if annotation_type in {
-            ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
-            ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
-        }:
-            suffix = "comme disponible" if annotation_type == ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE else "comme indisponible"
-            default_comment = (
-                f"Exclusion: données manquantes ({suffix}) "
-                f"({selected_row['start']} → {selected_row['end']})"
+            with col2:
+                user_name = st.text_input(
+                    "Votre nom (optionnel)",
+                        placeholder="ex: Jean Dupont",
+                        help="Identifiez-vous pour traçabilité"
+                    )
+
+            default_comment = ""
+            if annotation_type in {
+                ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE,
+                ANNOTATION_TYPE_MISSING_EXCL_UNAVAILABLE,
+            }:
+                suffix = "comme disponible" if annotation_type == ANNOTATION_TYPE_MISSING_EXCL_AVAILABLE else "comme indisponible"
+                default_comment = (
+                    f"Exclusion: données manquantes ({suffix}) "
+                    f"({selected_row['start']} → {selected_row['end']})"
+                )
+
+            comment = st.text_area(
+                "Commentaire / Raison",
+                value=default_comment,
+                placeholder="Décrivez la raison de cette annotation...",
+                help="Obligatoire - Minimum 10 caractères"
             )
 
-        comment = st.text_area(
-            "Commentaire / Raison",
-            value=default_comment,
-            placeholder="Décrivez la raison de cette annotation...",
-            help="Obligatoire - Minimum 10 caractères"
-        )
-
-        submitted = st.form_submit_button("✅ Valider l'annotation")
+            submitted = st.form_submit_button("✅ Valider l'annotation")
 
         if submitted:
             if not comment :
